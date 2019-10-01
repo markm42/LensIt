@@ -284,5 +284,3 @@ def vtm2tlm_sym(tht, vtm):
     _vtm[:len(tht) // 2,:]  = vtm[:len(tht) // 2,lmax:] + vtm[slice(len(tht), len(tht) // 2 -1, -1),lmax:]
     _vtm[len(tht) // 2 :,:] = vtm[:len(tht) // 2,lmax:] - vtm[slice(len(tht), len(tht) // 2 -1, -1),lmax:]
     return fsht.vtm2alm_syms0(tht[:len(tht)/2], _vtm)
-
-

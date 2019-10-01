@@ -61,6 +61,22 @@ def apply_fini_MLIK(soltn, cov, maps, **kwargs):
     return soltn
 
 
+def MLIK2BINV(soltn, cov, maps, **kwargs):
+    """
+    Output TEB skyalms shaped
+    B^t Cov^-1 d = B^t Ni data - (B^t Ni B) MLIK(data)
+             = B^t Ni (data - B MLIK(data))
+    """
+    assert len(soltn) == TEBlen(_type)
+    assert len(maps) == TQUlen(_type), (maps.shape, _type)
+    TQUmlik = SM.TE2TQUlms(_type, cov.lib_skyalm, soltn)
+    for i, f in enumerate(_type):
+        _map = maps[i] - cov.apply_R(f, TQUmlik[i])
+        cov.apply_map(f, _map, inplace=True)
+        TQUmlik[i] = cov.apply_Rt(f, _map)
+    del _map
+    return opfilt_cinv.filtTEBlms(SMwBB.TQU2TEBlms(_type, cov.lib_skyalm, TQUmlik),cov)
+
 def soltn2TQUMlik(soltn, cov):
     assert len(soltn) == TEBlen(_type), (len(soltn), TEBlen(_type))
     return SM.TE2TQUlms(_type, cov.lib_skyalm, soltn)
