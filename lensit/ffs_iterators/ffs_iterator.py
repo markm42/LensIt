@@ -5,14 +5,13 @@ import shutil
 import time
 
 import numpy as np
-import pylab as pl
 from matplotlib.backends.backend_pdf import PdfPages
 
 import lensit as fs
 from lensit import pbs
 from lensit.ffs_covs import ell_mat
 from lensit.ffs_deflect import ffs_deflect, ffs_pool
-from lensit.misc.lens_utils import PartialDerivativePeriodic as PDP, check_attributes, enumerate_progress
+from lensit.misc.misc_utils import PartialDerivativePeriodic as PDP, check_attributes, enumerate_progress
 
 _types = ['T', 'QU', 'TQU']
 
@@ -63,7 +62,7 @@ class _iterator(object):
 
         self.type = type
         self.lib_dir = lib_dir
-        self.timer = fs.misc.lens_utils.timer(True, prefix=__name__)
+        self.timer = fs.misc.misc_utils.timer(True, prefix=__name__)
 
         par = imp.load_source('parfile', parfile)
         check_attributes(par, ['isocov', 'lencov'])
@@ -266,6 +265,7 @@ class _iterator(object):
         self.barrier()
 
         if self.PBSRANK == 0 and not os.path.exists(self.lib_dir + '/figs/check_figs.pdf'):
+            import pylab as pl
             pl.figure()
             figname = self.lib_dir + '/figs/check_figs.pdf'
             pp = PdfPages(figname)
@@ -361,6 +361,7 @@ class _iterator(object):
         Ndone = self.how_many_iter_done(key)
         figname = self.lib_dir + '/figs/residual_upto%s.pdf' % Ndone
         if self.PBSRANK == 0 and Ndone > 0 and not os.path.exists(figname):
+            import pylab as pl
             if not os.path.exists(self.lib_dir + '/cls/residuals'): os.makedirs(self.lib_dir + '/cls/residuals')
             N0len = self.load_N0('p', 'len')
             N0unl = self.load_N0('p', 'unl')
@@ -392,6 +393,7 @@ class _iterator(object):
         Ndone = self.how_many_iter_done(key)
         figname = self.lib_dir + '/figs/mapsupto%s.pdf' % Ndone
         if not os.path.exists(figname) and self.PBSRANK == 0:
+            import pylab as pl
             pp = PdfPages(figname)
             ftl = np.arange(self.lib_qlm.ellmax + 1)
             ftl[:40] *= 0
@@ -414,6 +416,7 @@ class _iterator(object):
         Ndone = self.how_many_iter_done(key)
         figname = self.lib_dir + '/figs/gradients_upto%s.pdf' % Ndone
         if self.PBSRANK == 0 and Ndone > 0 and not os.path.exists(figname):
+            import pylab as pl
             pp = PdfPages(figname)
             if not os.path.exists(self.lib_dir + '/cls/gradients'): os.makedirs(self.lib_dir + '/cls/gradients')
             w = lambda ell: ell ** 2 * (ell + 1.) ** 2 * 1e7 / 2. / np.pi
@@ -450,6 +453,7 @@ class _iterator(object):
     def plot_plmxinputCls(self, key):
         Ndone = self.how_many_iter_done(key)
         if self.PBSRANK == 0 and Ndone > 0:
+            import pylab as pl
             figname = self.lib_dir + '/figs/plmxinput_upto%s.pdf' % Ndone
             if not os.path.exists(self.lib_dir + '/cls/cross2input'): os.makedirs(self.lib_dir + '/cls/cross2input')
             w = lambda ell: ell ** 2 * (ell + 1.) ** 2 * 1e7 / 2. / np.pi
@@ -474,6 +478,7 @@ class _iterator(object):
     def plot_plmautoCls(self, key):
         Ndone = self.how_many_iter_done(key)
         if self.PBSRANK == 0 and Ndone > 0:
+            import pylab as pl
             figname = self.lib_dir + '/figs/plmauto_upto%s.pdf' % Ndone
             if not os.path.exists(self.lib_dir + '/cls/auto'): os.makedirs(self.lib_dir + '/cls/auto')
             w = lambda ell: ell ** 2 * (ell + 1.) ** 2 * 1e7 / 2. / np.pi
@@ -854,7 +859,7 @@ class _iterator(object):
         # Zeroth order inverse Hessian :
         apply_H0k = lambda rlm, k: \
             self.lib_qlm.alm2rlm(self.lib_qlm.almxfl(self.lib_qlm.rlm2alm(rlm), self.get_norm(key)))
-        BFGS_H = fslens.iterators.bfgs.BFGS_Hessian(self.lib_dir + '/Hessian', apply_H0k, {}, {}, L=self.NR_method,
+        BFGS_H = fs.ffs_iterators.bfgs.BFGS_Hessian(self.lib_dir + '/Hessian', apply_H0k, {}, {}, L=self.NR_method,
                                                     verbose=verbose)
         # Adding the required y and s vectors :
         for k in xrange(np.max([0, iter - self.NR_method]), iter):
@@ -1133,9 +1138,9 @@ class iterator_simMF(_iterator):
                 # Sign of this is pot-like, not gradient-like
                 grad = -grad[{'p': 0, 'o': 1}[key.lower()]]
                 if self.subtract_phi0:
-                    _f = fslens.displacements.displacements.ffs_id_displacement(self.lencov.sky_shape,
+                    _f = fs.ffs_deflect.ffs_deflect.ffs_id_displacement(self.lencov.sky_shape,
                                                                                 self.lencov.lsides)
-                    _fi = fslens.displacements.displacements.ffs_id_displacement(self.lencov.sky_shape,
+                    _fi = fs.ffs_deflect.ffs_deflect.ffs_id_displacement(self.lencov.sky_shape,
                                                                                  self.lencov.lsides)
                     self.lencov.set_ffinv(_f, _fi)
                     grad0, _cgit_done = self.lencov.evalMF(self.type, self.MFkey, None, phas_dat.get_sim(idx),

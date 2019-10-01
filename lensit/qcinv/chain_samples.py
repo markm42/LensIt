@@ -1,6 +1,17 @@
 import cd_solve
 import numpy as np
 
+def get_low_res_mgchain(lmax_sky = 3000, lmax_split = 2999, nside = 2048, tol=1e-4, Nsub = 20, dense_file='', **kwargs):
+    #lmax_sky = 3000
+    #lmax_split = 2999
+    #nside = 2048
+    #tol = 1e-4
+    #Nsub = 20
+    nside_diag = nside
+    
+    chain_descr = [[1, ["diag_cl"],lmax_split,nside_diag, Nsub, 0.,cd_solve.tr_cg, cd_solve.cache_mem()],
+                   [0, ["split(stage(1), %s, diag_cl)" % (lmax_split)], lmax_sky, nside, np.inf, tol, cd_solve.tr_cg, cd_solve.cache_mem()]]
+    return chain_descr
 
 def get_defaultmgchain(lmax_sky, lsides, datshape, tol=1e-5, iter_max=np.inf, dense_file='', **kwargs):
     # FIXME :

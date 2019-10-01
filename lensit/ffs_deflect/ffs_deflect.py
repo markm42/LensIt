@@ -3,13 +3,15 @@ import os
 
 import numpy as np
 from scipy import interpolate
-from scipy import weave
-
+try :
+    from scipy import weave
+except:
+    import weave
 import lensit.misc.map_spliter as map_spliter
 from lensit.ffs_deflect import ffs_pool
-from lensit.misc import lens_utils as utils
+from lensit.misc import misc_utils as utils
 from lensit.misc import rfft2_utils
-from lensit.misc.lens_utils import PartialDerivativePeriodic as PDP, Log2ofPowerof2, Freq
+from lensit.misc.misc_utils import PartialDerivativePeriodic as PDP, Log2ofPowerof2, Freq
 
 try:
     from lensit.gpu import lens_GPU
@@ -85,9 +87,16 @@ class ffs_displacement(object):
         # Checking inputs :
         self.shape = self.get_dx().shape
         self.lsides = tuple(lsides)
-        self.rmin = np.array(self.lsides) / np.array(self.shape).astype(np.float64)
+        self.rmin = (1. * np.array(self.lsides)) / np.array(self.shape)
 
-        HD_res = Log2ofPowerof2(self.shape)
+        try:
+            HD_res = Log2ofPowerof2(self.shape)
+            po2 = 1
+        except Exception as e:
+            print 'Exception error: ',e
+            HD_res = self.shape
+            po2 = 0
+            
         LD_res = LD_res or HD_res
         self.HD_res = (HD_res[0], HD_res[1])
         self.LD_res = (min(LD_res[0], HD_res[0]), min(LD_res[1], HD_res[1]))
@@ -101,13 +110,18 @@ class ffs_displacement(object):
         buffer0 = np.int16(np.max([10, (6 * np.max(np.abs(self.get_dy())) / self.rmin[0])]))
         buffer1 = np.int16(np.max([10, (6 * np.max(np.abs(self.get_dx())) / self.rmin[1])]))
 
-        self.buffers = (
-            max(buffer0, buffer1) * (self.LD_res[0] < self.HD_res[0]),
-            max(buffer0, buffer1) * (self.LD_res[1] < self.HD_res[1]))
-        self.chk_shape = 2 ** np.array(self.LD_res) + 2 * np.array(self.buffers)  # shape of the chunks
-        self.N_chks = np.prod(2 ** (np.array(self.HD_res) - np.array(self.LD_res)))  # Number of chunks on each side.
+        self.buffers = (max(buffer0, buffer1) * (self.LD_res[0] < self.HD_res[0]),
+                        max(buffer0, buffer1) * (self.LD_res[1] < self.HD_res[1]))
+        #self.chk_shape = 2 ** np.array(self.LD_res) + 2 * np.array(self.buffers)  # shape of the chunks
+        #self.N_chks = np.prod(2 ** (np.array(self.HD_res) - np.array(self.LD_res)))  # Number of chunks on each side.
+        if HD_res[0]<100:
+            self.chk_shape = 2 ** np.array(self.LD_res) + 2 * np.array(self.buffers)  # shape of the chunks
+            self.N_chks = np.prod(2 ** (np.array(self.HD_res) - np.array(self.LD_res)))  # Number of chunks on each side.
+        else:
+            self.chk_shape = np.array(self.LD_res) + 2 * np.array(self.buffers)  # shape of the chunks
+            self.N_chks = np.prod(2 ** (np.array(self.HD_res) - np.array(self.LD_res)))  # Number of chunks on each side.
         if verbose:
-            print 'rank %s, ffs_displacement::buffers size, chk_shape' % pbs.rank, (buffer0, buffer1), self.chk_shape
+            print 'rank %s, ffs_deflect::buffers size, chk_shape' % pbs.rank, (buffer0, buffer1), self.chk_shape
 
         self.k = spline_order  # order of the spline for displacement interpolation
 
@@ -207,7 +221,10 @@ class ffs_displacement(object):
 
     def get_dxdy_chk_N(self, N, buffers=None):
         if buffers is None: buffers = self.buffers
-        shape = (2 ** self.LD_res[0] + 2 * buffers[0], 2 ** self.LD_res[1] + 2 * buffers[1])
+        if self.LD_res[0]<100:
+            shape = (2 ** self.LD_res[0] + 2 * buffers[0], 2 ** self.LD_res[1] + 2 * buffers[1])
+        else:
+            shape = (self.LD_res[0] + 2 * buffers[0], self.LD_res[1] + 2 * buffers[1])
         dx, dy = np.zeros(shape), np.zeros(shape)
         spliter_lib = map_spliter.periodicmap_spliter()  # library to split periodic maps.
         sLDs, sHDs = spliter_lib.get_slices_chk_N(N, self.LD_res, self.HD_res, buffers)
@@ -259,6 +276,7 @@ class ffs_displacement(object):
         if > 0 'use_Pool' ** 2 is the number of threads. On laptop and Darwin use_Pool = 16 has the best performances.
         It use_Pool is set, then 'map' must be the path to the map to lens or map will be saved to disk.
         """
+        # TODO : could evaluate the splines at low res.
         assert self.load_map(map).shape == self.shape, (self.load_map(map).shape, self.shape)
         if crude > 0:
             return self.lens_map_crude(map, crude)
@@ -277,9 +295,14 @@ class ffs_displacement(object):
             assert np.all(np.array(buffers) > (np.array(self.buffers) + 5.)), (buffers, self.buffers)
             Nchunks = 2 ** (np.sum(np.array(self.HD_res) - np.array(LD_res)))
             lensed_map = np.empty(self.shape)  # Output
-            dx_N = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
-            dy_N = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
-            unl_CMBN = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
+            if LD_res[0]<100:
+                dx_N = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
+                dy_N = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
+                unl_CMBN = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
+            else:
+                dx_N = np.empty((LD_res[0] + 2 * buffers[0], LD_res[1] + 2 * buffers[1]))
+                dy_N = np.empty((LD_res[0] + 2 * buffers[0], LD_res[1] + 2 * buffers[1]))
+                unl_CMBN = np.empty((LD_res[0] + 2 * buffers[0], LD_res[1] + 2 * buffers[1]))
             if self.verbose:
                 print '++ lensing map :' \
                       '   splitting map on GPU , chunk shape %s, buffers %s' % (dx_N.shape, buffers)
@@ -355,7 +378,7 @@ class ffs_displacement(object):
                                   lenmap[j * width + i] = bicubiclensKernel(filtmap,i + dx_gu[j * width + i],j + dy_gu[j * width + i],width);\
                                   }\
                               }"
-            header = r' "%s/fslens/mllens_GPU/bicubicspline.h" ' % os.path.abspath(os.curdir)
+            header = r' "%s/lensit/gpu/bicubicspline.h" ' % os.path.abspath(os.curdir)
             if do_not_prefilter:
                 filtmap = self.load_map(map).astype(np.float64)
             else:
@@ -610,7 +633,7 @@ class ffs_displacement(object):
         elif use_Pool == 0:
             spliter_lib = map_spliter.periodicmap_spliter()  # library to split periodic maps.
             dx_inv, dy_inv = np.empty(self.shape), np.empty(self.shape)
-            label = 'ffs_displacement::calculating inverse displ. field'
+            label = 'ffs_deflect::calculating inverse displ. field'
             for i, N in utils.enumerate_progress(xrange(self.N_chks), label=label):
                 # Doing chunk N
                 dx_inv_N, dy_inv_N = self.get_inverse_chk_N(N, NR_iter=NR_iter)
@@ -634,8 +657,12 @@ class ffs_displacement(object):
                 LD_res, buffers = get_GPUbuffers(GPU_res)
                 assert np.all(np.array(buffers) > (np.array(self.buffers) + 5.)), (buffers, self.buffers)
                 Nchunks = 2 ** (np.sum(np.array(self.HD_res) - np.array(LD_res)))
-                dx_N = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
-                dy_N = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
+                if LD_res[0]<100:
+                    dx_N = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
+                    dy_N = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
+                else:
+                    dx_N = np.empty((LD_res[0] + 2 * buffers[0], LD_res[1] + 2 * buffers[1]))
+                    dy_N = np.empty((LD_res[0] + 2 * buffers[0], LD_res[1] + 2 * buffers[1]))
                 if self.verbose:
                     print '++ inverse displacement :' \
                           '   splitting inverse on GPU , chunk shape %s, buffers %s' % (dx_N.shape, buffers)
@@ -725,7 +752,7 @@ class ffs_displacement(object):
         Minv_xx = bic_filter(Minv_xx)
         Minv_yy = bic_filter(Minv_yy)
 
-        header = r' "%s/fslens/mllens_GPU/bicubicspline.h" ' % os.path.abspath(os.curdir)
+        header = r' "%s/lensit/gpu/bicubicspline.h" ' % os.path.abspath(os.curdir)
         iterate = r"\
             double fx,fy;\
             double ex_len_dx,ey_len_dy,len_Mxx,len_Mxy,len_Myx,len_Myy;\

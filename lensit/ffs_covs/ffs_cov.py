@@ -12,7 +12,7 @@ import lensit.qcinv
 from lensit.ffs_covs import ffs_specmat as SM
 from lensit.ffs_covs.ffs_specmat import get_unlPmat_ij, get_Pmat, get_datPmat_ij, \
     TQUPmats2TEBcls, get_rootunlPmat_ij, get_unlrotPmat_ij
-from lensit.misc.lens_utils import timer
+from lensit.misc.misc_utils import timer
 from lensit.sims.sims_generic import hash_check
 
 _timed = True
@@ -76,10 +76,10 @@ class ffs_diagcov_alm(object):
         if not os.path.exists(lib_dir) and lensit.pbs.rank == 0:
             os.makedirs(lib_dir)
         lensit.pbs.barrier()
-        if not os.path.exists(lib_dir + '/cov_hash.pk') and lensit.pbs.rank == 0:
-            pk.dump(self.hashdict(), open(lib_dir + '/cov_hash.pk', 'w'))
-        lensit.pbs.barrier()
-        hash_check(pk.load(open(lib_dir + '/cov_hash.pk', 'r')), self.hashdict())
+        #if not os.path.exists(lib_dir + '/cov_hash.pk') and lensit.pbs.rank == 0:
+        #    pk.dump(self.hashdict(), open(lib_dir + '/cov_hash.pk', 'w'))
+        #lensit.pbs.barrier()
+        #hash_check(pk.load(open(lib_dir + '/cov_hash.pk', 'r')), self.hashdict()) # Mark changed
 
         self.barrier = lensit.pbs.barrier if _runtimebarriers else lambda: -1
         self.pbsrank = 0 if _runtimerankzero else lensit.pbs.rank
@@ -535,7 +535,7 @@ class ffs_diagcov_alm(object):
     def get_iblms(self, _type, datalms, use_cls_len=True, use_Pool=0, **kwargs):
         """
          Returns P^{-1} maximum likelihood sky CMB modes.
-         (inputs to quadratc estimator routines)
+         (inputs to quadratic estimator routines)
         """
         if datalms.shape == ((len(_type), self.dat_shape[0], self.dat_shape[1])):
             _datalms = np.array([self.lib_datalm.map2alm(_m) for _m in datalms])
@@ -620,7 +620,8 @@ class ffs_diagcov_alm(object):
     def apply_condpseudiagcl(self, _type, alms, use_Pool=0):
         return self.apply_conddiagcl(_type, alms, use_Pool=use_Pool)
 
-    def get_qlms(self, _type, iblms, lib_qlm, use_cls_len=True, **kwargs):
+    #def get_qlms(self, _type, iblms, lib_qlm, use_cls_len=True, **kwargs):
+    def get_qlms(self, _type, iblms, lib_qlm, use_cls_len=True, iblms2=None, **kwargs):
         """
         Unormalized quadratic estimates (potential and curl).
         Input are max. likelihood sky_alms, given by B^t F^t Cov^{-1} = P^{-1} (...)
@@ -642,7 +643,11 @@ class ffs_diagcov_alm(object):
         clms = np.zeros((len(_type), self.lib_skyalm.alm_size), dtype=complex)
         for _i in range(len(_type)):
             for _j in range(len(_type)):
-                clms[_i] += get_unlPmat_ij(_type, self.lib_skyalm, weights_cls, _i, _j) * iblms[_j]
+                #clms[_i] += get_unlPmat_ij(_type, self.lib_skyalm, weights_cls, _i, _j) * iblms[_j]
+                if iblms2 is None:
+                    clms[_i] += get_unlPmat_ij(_type, self.lib_skyalm, weights_cls, _i, _j) * iblms[_j]
+                else:
+                    clms[_i] += get_unlPmat_ij(_type, self.lib_skyalm, weights_cls, _i, _j) * iblms2[_j]
 
         t.checkpoint("  get_qlms::mult with %s Pmat" % ({True: 'len', False: 'unl'}[use_cls_len]))
 
@@ -824,7 +829,118 @@ class ffs_diagcov_alm(object):
         assert _type in _types, (_type, _types)
         Rpp, ROO = self.get_qlm_resprlm(_type, lib_qlm, use_cls_len=use_cls_len, cls_obs=cls_obs)
         return (lib_qlm.alm2Pk_minimal(np.sqrt(2 * Rpp)), lib_qlm.alm2Pk_minimal(np.sqrt(2 * ROO)))
+    
+    def get_response(self, _type, lib_qlm, use_cls_len=True, cls_weights=None, cls_filt=None, cls_cmb=None):
+        """
+        Lensing quadratic estimator gradient and curl response functions.
 
+            Args:
+                cls_filt: CMB spectra used in the filtering procedure ( i.e. those entering Cov^{-1}).
+                          Defaults to self.cls_len if use_cls_len else self.cls_unl
+                cls_weights: CMB spectra used in the QE weights
+                         (those entering the numerator in the usual Okamoto & Hu formulae e.g.)
+                          Defaults to self.cls_len if use_cls_len else self.cls_unl
+                cls_cmb: CMB spectra of the sky
+                         (~contractions of X,b with X ~ il_b Cl^cmb when writing pertub. X ~ X + alpha_b X,b)
+
+
+        -(xi^cmb,b K )_{ab}(z) (xi^w,a K)^{ba}(z)
+         - (K)(z) (xi^w,a K xi^cmb,b)(z)
+
+        """
+        assert _type in _types, (_type, _types)
+        t = timer(_timed, prefix=__name__, suffix=' curvpOlm')
+
+        _cls_weights = cls_weights or (self.cls_len if use_cls_len else self.cls_unl)
+        _cls_filt = cls_filt or (self.cls_len if use_cls_len else self.cls_unl)
+        _cls_cmb = cls_cmb or (self.cls_len if use_cls_len else self.cls_unl)
+        if not cls_weights is None: t.checkpoint('Using custom Cls weights')
+        if not cls_filt is None: t.checkpoint('Using custom Cls filt')
+        if not cls_cmb is None: t.checkpoint('Using custom Cls cmb')
+
+        Pinv_obs1 = get_Pmat(_type, self.lib_datalm, _cls_filt,
+                             cls_noise=self.cls_noise, cl_transf=self.cl_transf, inverse=True)
+        Pinv_obs2 = Pinv_obs1
+
+        # xi K
+        def get_xiK(i, j, id, cls):
+            assert id in [1, 2]
+            _Pinv_obs = Pinv_obs1 if id == 1 else Pinv_obs2
+            ret = get_unlPmat_ij(_type, self.lib_datalm, cls, i, 0) * _Pinv_obs[:, 0, j]
+            for _k in range(1, len(_type)):
+                ret += get_unlPmat_ij(_type, self.lib_datalm, cls, i, _k) * _Pinv_obs[:, _k, j]
+            return self.lib_datalm.almxfl(ret, self.cl_transf ** 2)
+        # xi^w K xi^cmb
+        def get_xiwKxicmb(i, j, id):
+            assert id in [1, 2]
+            ret = get_xiK(i, 0, id, _cls_weights) * get_unlPmat_ij(_type, self.lib_datalm, _cls_cmb, 0, j)
+            for _k in range(1, len(_type)):
+                ret += get_xiK(i, _k, id, _cls_weights) * get_unlPmat_ij(_type, self.lib_datalm, _cls_cmb, _k, j)
+            return ret
+
+        ikx = self.lib_datalm.get_ikx
+        iky = self.lib_datalm.get_iky
+        t.checkpoint("  inverse %s Pmats" % ({True: 'len', False: 'unl'}[use_cls_len]))
+        F = np.zeros(self.lib_datalm.ell_mat.shape, dtype=float)
+
+        # Calculation of (xi^cmb,b K) (xi^w,a K)
+        for i in range(len(_type)):
+            for j in range(0, len(_type)):
+                # ! Matrix not symmetric for TQU or non identical noises. But xx or yy element ok.#(2 - (i == j)) *
+                F +=   self.lib_datalm.alm2map(ikx() * get_xiK(i, j, 1, _cls_cmb)) \
+                     * self.lib_datalm.alm2map(ikx() * get_xiK(j, i, 2, _cls_weights))
+        Fxx = lib_qlm.map2alm(F)
+        F *= 0
+        t.checkpoint("  Fxx , part 1")
+
+        for i in range(len(_type)):
+            for j in range(0, len(_type)):
+                # ! Matrix not symmetric for TQU or non identical noises. But xx or yy element ok.#(2 - (i == j)) *
+                F +=  self.lib_datalm.alm2map(iky() * get_xiK(i, j, 1, _cls_cmb)) \
+                     * self.lib_datalm.alm2map(iky() * get_xiK(j, i, 2, _cls_weights))
+        Fyy = lib_qlm.map2alm(F)
+        F *= 0
+        t.checkpoint("  Fyy , part 1")
+
+        for i in range(len(_type)):
+            for j in range(len(_type)):
+                # ! BPBCovi Matrix not symmetric for TQU or non identical noises.
+                F += self.lib_datalm.alm2map(ikx() * get_xiK(i, j, 1, _cls_cmb)) \
+                     * self.lib_datalm.alm2map(iky() * get_xiK(j, i, 2, _cls_weights))
+        Fxy = lib_qlm.map2alm(F)
+        F *= 0
+        t.checkpoint("  Fxy , part 1")
+
+        # Adding to that (K)(z) (xi^w,a K xi^cmb,b)(z)
+        tmap = lambda i, j: self.lib_datalm.alm2map(
+            self.lib_datalm.almxfl(Pinv_obs1[:, i, j], self.cl_transf ** 2))
+
+        for i in range(len(_type)):
+            for j in range(0, len(_type)):
+                F += tmap(i, j) * self.lib_datalm.alm2map(ikx() ** 2 * get_xiwKxicmb(i, j, 2))
+        Fxx += lib_qlm.map2alm(F)
+        F *= 0
+        t.checkpoint("  Fxx , part 2")
+
+        for i in range(len(_type)):
+            for j in range(0, len(_type)):
+                F += tmap(i, j) * self.lib_datalm.alm2map(iky() ** 2 * get_xiwKxicmb(i, j, 2))
+        Fyy += lib_qlm.map2alm(F)
+        F *= 0
+        t.checkpoint("  Fyy , part 2")
+
+        for i in range(len(_type)):
+            for j in range(0, len(_type)):
+                F += tmap(i, j) * self.lib_datalm.alm2map(iky() * ikx() * get_xiwKxicmb(i, j, 2))
+        Fxy += lib_qlm.map2alm(F)
+        t.checkpoint("  Fxy , part 2")
+
+        facunits = -1. / np.sqrt(np.prod(self.lsides))
+        return np.array([lib_qlm.bin_realpart_inell(r) for r in xylms_to_phiOmegalm(lib_qlm, Fxx.real * facunits, Fyy.real * facunits, Fxy.real * facunits)])
+    
+    
+    
+    
     def get_qlm_curvature(self, _type, lib_qlm,
                           use_cls_len=True, cls_weights=None, cls_filt=None, cls_obs=None, cls_obs2=None):
         """
@@ -1376,7 +1492,8 @@ class ffs_lencov_alm(ffs_diagcov_alm):
                 ret[_j] += get_unlPmat_ij(_type, self.lib_skyalm, self.cls_unl, _j, _i) * bilm
         return ret
 
-    def get_qlms(self, _type, iblms, lib_qlm, use_Pool=0, use_cls_len=False, **kwargs):
+    #def get_qlms(self, _type, iblms, lib_qlm, use_Pool=0, use_cls_len=False, **kwargs):
+    def get_qlms(self, _type, iblms, lib_qlm, use_Pool=0, use_cls_len=False, iblms2=None, **kwargs):
         """
         Likelihood gradient (from the quadratic part).
         (B^t F^t ulm)^a(z) (D dxi_unl/da D^t B^t F^t ulm)_a(z)
@@ -1389,7 +1506,12 @@ class ffs_lencov_alm(ffs_diagcov_alm):
         cls = self.cls_len if use_cls_len else self.cls_unl
         almsky1 = np.empty((len(_type), self.lib_skyalm.alm_size), dtype=complex)
 
-        Bu = lambda idx: self.lib_skyalm.alm2map(iblms[idx])
+        #Bu = lambda idx: self.lib_skyalm.alm2map(iblms[idx]) # to get cl_phi from different maps, iblms needs to be different here
+        if iblms2 is None:
+			Bu = lambda idx: self.lib_skyalm.alm2map(iblms[idx]) # to get cl_phi from different maps, iblms needs to be different here
+        else:
+			Bu = lambda idx: self.lib_skyalm.alm2map(iblms2[idx]) # to get cl_phi from different maps, iblms needs to be different here
+			
         _2qlm = lambda _m: lib_qlm.udgrade(self.lib_skyalm, self.lib_skyalm.map2alm(_m))
 
         def DxiDt(alms, axis):
@@ -1476,7 +1598,7 @@ class ffs_lencov_alm(ffs_diagcov_alm):
         """
         assert lib_qlm.ell_mat.lsides == self.lsides, (self.lsides, lib_qlm.ell_mat.lsides)
         assert _type in _types, (_type, _types)
-        timer = fs.misc.lens_utils.timer(_timed)
+        timer = fs.misc.misc_utils.timer(_timed)
         ikx = lambda: self.lib_skyalm.get_ikx()
         iky = lambda: self.lib_skyalm.get_iky()
         timer.checkpoint('Just started eval MF %s %s' % (_type, MFkey))

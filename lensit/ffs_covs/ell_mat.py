@@ -4,12 +4,12 @@ import pickle as pk
 import lensit as fs
 from lensit.sims import sims_generic
 from lensit.sims.sims_generic import hash_check
-import hashlib
+from lensit.misc.misc_utils import npy_hash
 from lensit import pbs
 
 try:
     import pyfftw
-except:
+except ImportError:
     print "-- NB : import of pyfftw unsucessful -- "
 
 
@@ -33,7 +33,7 @@ class ell_mat():
     Caches various matrices to facilitate multiple calls.
     """
 
-    def __init__(self, lib_dir, shape, lsides):
+    def __init__(self, lib_dir, shape, lsides,mmap_mode = None):
         assert len(shape) == 2 and len(lsides) == 2
         assert shape[0] % 2 == 0 and shape[1] % 2 == 0
         assert shape[0] < 2 ** 16 and shape[1] < 2 ** 16
@@ -41,6 +41,8 @@ class ell_mat():
         self.rshape = (shape[0], shape[1] / 2 + 1)
         self.lsides = tuple(lsides)
         self.lib_dir = lib_dir
+        self.mmap_mode = mmap_mode
+
         # Dumping ell mat in lib_dir. Overwrites if already present.
 
         if pbs.rank == 0:
@@ -51,23 +53,27 @@ class ell_mat():
 
         hash_check(pk.load(open(lib_dir + "/ellmat_hash.pk", 'r')), self.hash_dict())
 
-        if pbs.rank == 0:
-            if not os.path.exists(self.lib_dir + '/ellmat.npy'):
+        if pbs.rank == 0 and not os.path.exists(self.lib_dir + '/ellmat.npy'):
                 print 'ell_mat:caching ells in ', self.lib_dir + '/ellmat.npy'
-                kmin = 2. * np.pi / np.array(self.lsides)
-                ky2 = Freq(np.arange(self.shape[0]), self.shape[0]) ** 2 * kmin[0] ** 2
-                kx2 = Freq(np.arange(self.rshape[1]), self.shape[1]) ** 2 * kmin[1] ** 2
-                ones = np.ones(np.max(self.shape))
-                freq_map = self.k2ell(
-                    np.sqrt(np.outer(ky2, ones[0:self.rshape[1]]) + np.outer(ones[0:self.rshape[0]], kx2)))
-
-                # map of integer ell. in int16 format. k is mapped to ell according to k = ell + 1/2
-                np.save(self.lib_dir + '/ellmat.npy', freq_map)
+                np.save(self.lib_dir + '/ellmat.npy', self._build_ellmat())
         pbs.barrier()
         # FIXME
         self.ellmax = int(self._get_ellmax())
         self._ell_counts = self._build_ell_counts()
         self._nz_counts = self._ell_counts.nonzero()
+
+    def __eq__(self, ell_mat):
+        return self.shape == ell_mat.shape and self.lsides == self.lsides
+
+    def _build_ellmat(self):
+        kmin = 2. * np.pi / np.array(self.lsides)
+        ky2 = Freq(np.arange(self.shape[0]), self.shape[0]) ** 2 * kmin[0] ** 2
+        kx2 = Freq(np.arange(self.rshape[1]), self.shape[1]) ** 2 * kmin[1] ** 2
+        ones = np.ones(np.max(self.shape))
+        return self.k2ell(np.sqrt(np.outer(ky2, ones[0:self.rshape[1]]) + np.outer(ones[0:self.rshape[0]], kx2)))
+
+    def hash_dict(self):
+        return {'shape': self.shape, 'lsides': self.lsides}
 
     def Nyq(self, axis):
         assert axis in [0, 1], axis
@@ -86,8 +92,6 @@ class ell_mat():
     def check_compatible(self, ellmat):
         hash_check(self.hash_dict(), ellmat.hash_dict())
 
-    def hash_dict(self):
-        return {'shape': self.shape, 'lsides': self.lsides}
 
     def __call__(self, *args, **kwargs):
         return self.get_ellmat(*args, **kwargs)
@@ -95,20 +99,31 @@ class ell_mat():
     def __getitem__(self, item):
         return self.get_ellmat()[item]
 
+    def get_pixwinmat(self):
+        """ sin(kx Lcell_x / 2) sin (k_y Lcell_y / 2 ) """
+        ky = (np.pi/self.shape[0]) * Freq(np.arange(self.shape[0]), self.shape[0])
+        ky[self.shape[0] / 2:] *= -1.
+        kx = (np.pi/self.shape[1]) * Freq(np.arange(self.rshape[1]), self.shape[1])
+        rety = np.sin(ky)
+        rety[1:] /= ky[1:];rety[0] = 1.
+        retx = np.sin(kx)
+        retx[1:] /= kx[1:];retx[0] = 1.
+        return np.outer(rety,retx)
+
     def get_ellmat(self, ellmax=None):
         """
         Returns the matrix containing the multipole ell assigned to k = (kx,ky)
         """
         if ellmax is None:
-            return np.load(self.lib_dir + '/ellmat.npy', mmap_mode='r')
+            return np.load(self.lib_dir + '/ellmat.npy', mmap_mode=self.mmap_mode)
         else:
             fname = self.lib_dir + '/ellmat_ellmax%s.npy' % ellmax
-            if os.path.exists(fname): return np.load(fname, mmap_mode='r')
+            if os.path.exists(fname): return np.load(fname, mmap_mode=self.mmap_mode)
             if pbs.rank == 0:
                 print 'ell_mat:caching ells in ', fname
                 np.save(fname, self.get_ellmat()[np.where(self.get_ellmat() <= ellmax)])
             pbs.barrier()
-            return np.load(fname, mmap_mode='r')
+            return np.load(fname, mmap_mode=self.mmap_mode)
 
     def get_phasemat(self, ellmax=None):
         """
@@ -116,19 +131,19 @@ class ell_mat():
         """
         if ellmax is None:
             fname = self.lib_dir + '/phasemat.npy'
-            if os.path.exists(fname): return np.load(fname, mmap_mode='r')
+            if os.path.exists(fname): return np.load(fname, mmap_mode=self.mmap_mode)
             if not os.path.exists(fname) and pbs.rank == 0:
                 print 'ell_mat:caching phases in ', fname
                 np.save(fname, np.arctan2(self.get_ky_mat(), self.get_kx_mat()))
             pbs.barrier()
-            return np.load(fname, mmap_mode='r')
+            return np.load(fname, mmap_mode=self.mmap_mode)
         else:
             fname = self.lib_dir + '/phase_ellmax%s.npy' % ellmax
             if not os.path.exists(fname) and pbs.rank == 0:
                 print 'ell_mat:caching phases in ', fname
                 np.save(fname, np.arctan2(self.get_ky_mat(), self.get_kx_mat())[np.where(self.get_ellmat() <= ellmax)])
             pbs.barrier()
-            return np.load(fname, mmap_mode='r')
+            return np.load(fname, mmap_mode=self.mmap_mode)
 
     def get_e2iphi_mat(self, cache_only=False):
         """
@@ -136,12 +151,12 @@ class ell_mat():
         """
         fname = self.lib_dir + '/e2iphimat.npy'
         if os.path.exists(fname):
-            return None if cache_only else np.load(fname, mmap_mode='r')
+            return None if cache_only else np.load(fname, mmap_mode=self.mmap_mode)
         if not os.path.exists(fname) and pbs.rank == 0:
             print 'ell_mat:caching e2iphi in ', fname
             np.save(fname, np.exp(2j * np.arctan2(self.get_ky_mat(), self.get_kx_mat())))
         pbs.barrier()
-        return None if cache_only else np.load(fname, mmap_mode='r')
+        return None if cache_only else np.load(fname, mmap_mode=self.mmap_mode)
 
     def degrade(self, LDshape, lib_dir=None):
         if np.all(LDshape >= self.shape): return self
@@ -152,37 +167,16 @@ class ell_mat():
         e2iphi = self.get_e2iphi_mat()
         return e2iphi.real, e2iphi.imag
 
-    def filt_map(self, map, ellmin, ellmax):
-        assert map.shape == self.shape, map.shape
-        rfftmap = self.filt_rfftmap_high(self.filt_rfftmap_low(np.fft.rfft2(map), ellmin), ellmax)
-        return np.fft.irfft2(rfftmap, map.shape)
-
-    def filt_map_low(self, map, ellmin):
-        assert map.shape == self.shape, map.shape
-        return np.fft.irfft2(self.filt_rfftmap_low(np.fft.rfft2(map), ellmin), map.shape)
-
-    def filt_map_high(self, map, ellmax):
-        assert map.shape == self.shape, map.shape
-        return np.fft.irfft2(self.filt_rfftmap_high(np.fft.rfft2(map), ellmax), map.shape)
-
-    def filt_rfftmap(self, rfftmap, ellmin, ellmax):
-        assert rfftmap.shape == self.rshape, rfftmap.shape
-        return self.filt_rfftmap_high(self.filt_rfftmap_low(rfftmap, ellmin), ellmax)
-
-    def filt_rfftmap_low(self, rfftmap, ellmin):
-        assert rfftmap.shape == self.rshape, rfftmap.shape
-        return np.where(self.get_ellmat() < ellmin, np.zeros(rfftmap.shape), rfftmap)
-
-    def filt_rfftmap_high(self, rfftmap, ellmax):
-        assert rfftmap.shape == self.rshape, rfftmap.shape
-        return np.where(self.get_ellmat() > ellmax, np.zeros(rfftmap.shape), rfftmap)
 
     def _get_ellmax(self):
         """ Max. ell present in the grid """
         return np.max(self.get_ellmat())
 
     def _build_ell_counts(self):
-        """ Number of entries in freq map. for each ell, in the rfftmap. Corresponds roughly to ell + 1/2."""
+        """
+        Number of non-redundant entries in freq map. for each ell, in the rfftmap.
+        Corresponds roughly to ell + 1/2.
+        """
         counts = np.bincount(self.get_ellmat()[:, 1:self.rshape[1] - 1].flatten(), minlength=self.ellmax + 1)
         s_counts = np.bincount(self.get_ellmat()[0:self.shape[0] / 2 + 1, [-1, 0]].flatten())
         counts[0:len(s_counts)] += s_counts
@@ -323,7 +317,7 @@ class ffs_alm(object):
     Simple-minded library to facilitate filtering operations on flat-sky alms in the ffs scheme.
     """
 
-    def __init__(self, ellmat, filt_func=lambda ell: ell > 0):
+    def __init__(self, ellmat, filt_func=lambda ell: ell > 0,kxfilt_func = None,kyfilt_func = None):
         """
         :param ellmat: ell_mat instance that defines the mode structure in the ffs scheme.
         :param filt: is callable with Boolean return. filt(ell) tells whether or not mode ell is considered
@@ -332,17 +326,31 @@ class ffs_alm(object):
         self.ell_mat = ellmat
         self.shape = self.ell_mat.shape
         self.lsides = self.ell_mat.lsides
+
         self.filt_func = filt_func
-        self.cond = filt_func(np.arange(self.ell_mat.ellmax + 1))
-        self.alm_size = np.count_nonzero(self.cond[self.ell_mat()])
+        self.kxfilt_func = kxfilt_func
+        self.kyfilt_func = kyfilt_func
+
+        #self.isocond = filt_func(np.arange(self.ell_mat.ellmax + 1))
+
+        self.alm_size = np.count_nonzero(self._cond())
         # The mapping ell[i] for i in alm array :
-        self.reduced_ellmat = lambda: ellmat()[self.cond[ellmat()]]
-        self.ellmax = np.max(self.reduced_ellmat())
-        self.ellmin = np.min(self.reduced_ellmat())
+        self.reduced_ellmat = lambda: ellmat()[self._cond()]
+        self.ellmax = np.max(self.reduced_ellmat()) if self.alm_size > 0 else None
+        self.ellmin = np.min(self.reduced_ellmat()) if self.alm_size > 0 else None
         # Some trivial convenience factors :
         self.fac_rfft2alm = np.sqrt(np.prod(ellmat.lsides)) / np.prod(self.ell_mat.shape)
         self.fac_alm2rfft = 1. / self.fac_rfft2alm
         # assert self.ellmax < ellmat()[0, -1], (self.ellmax, ellmat()[0, -1])  # Dont want to deal with redundant frequencies
+        self.__ellcounts = None
+
+    def _cond(self):
+        ret =  self.filt_func(self.ell_mat())
+        if self.kxfilt_func is not None:
+            ret &= self.kxfilt_func(self.ell_mat.get_kx_mat())
+        if self.kyfilt_func is not None:
+            ret &= self.kyfilt_func(self.ell_mat.get_ky_mat())
+        return ret
 
     def __eq__(self, lib_alm):
         if not np.all(self.ell_mat.lsides == lib_alm.ell_mat.lsides):
@@ -352,6 +360,16 @@ class ffs_alm(object):
         ellmax = max(self.ellmax, lib_alm.ellmax)
         if not np.all(self.filt_func(np.arange(ellmax + 1)) == lib_alm.filt_func(np.arange(ellmax + 1))):
             return False
+        kxf = self.kxfilt_func if self.kxfilt_func is not None else lambda kx : np.ones_like(kx, dtype = bool)
+        _kxf = lib_alm.kxfilt_func if lib_alm.kxfilt_func is not None else lambda kx: np.ones_like(kx, dtype=bool)
+        if not np.all(kxf(np.arange(-ellmax,ellmax + 1)) == _kxf(np.arange(-ellmax,ellmax + 1))):
+            return False
+
+        kyf = self.kyfilt_func if self.kyfilt_func is not None else lambda ky : np.ones_like(ky, dtype = bool)
+        _kyf = lib_alm.kyfilt_func if lib_alm.kyfilt_func is not None else lambda ky: np.ones_like(ky, dtype=bool)
+        if not np.all(kyf(np.arange(-ellmax,ellmax + 1)) == _kyf(np.arange(-ellmax,ellmax + 1))):
+            return False
+
         return True
 
     def iseq(self, lib_alm, allow_shape=False):
@@ -362,14 +380,30 @@ class ffs_alm(object):
             return False
         if not self.alm_size == lib_alm.alm_size:
             return False
+
         ellmax = max(self.ellmax, lib_alm.ellmax)
         if not np.all(self.filt_func(np.arange(ellmax + 1)) == lib_alm.filt_func(np.arange(ellmax + 1))):
             return False
+        kxf = self.kxfilt_func if self.kxfilt_func is not None else lambda kx: np.ones_like(kx, dtype=bool)
+        _kxf = lib_alm.kxfilt_func if lib_alm.kxfilt_func is not None else lambda kx: np.ones_like(kx, dtype=bool)
+        if not np.all(kxf(np.arange(-ellmax, ellmax + 1)) == _kxf(np.arange(-ellmax, ellmax + 1))):
+            return False
+
+        kyf = self.kyfilt_func if self.kyfilt_func is not None else lambda ky: np.ones_like(ky, dtype=bool)
+        _kyf = lib_alm.kyfilt_func if lib_alm.kyfilt_func is not None else lambda ky: np.ones_like(ky, dtype=bool)
+        if not np.all(kyf(np.arange(-ellmax, ellmax + 1)) == _kyf(np.arange(-ellmax, ellmax + 1))):
+            return False
+
         return True
 
     def hashdict(self):
-        return {'ellmat': self.ell_mat.hash_dict(),
-                'filt_func': hashlib.sha1(self.cond).hexdigest()}
+        ret = {'ellmat': self.ell_mat.hash_dict(),
+                'filt_func': npy_hash(self.filt_func(np.arange(self.ell_mat.ellmax + 1)))}
+        if self.kxfilt_func is not None:
+            ret[ 'kxfilt_func'] =  npy_hash(self.kxfilt_func(np.arange(-self.ell_mat.ellmax,self.ell_mat.ellmax + 1)))
+        if self.kyfilt_func is not None:
+            ret[ 'kyfilt_func'] =  npy_hash(self.kyfilt_func(np.arange(-self.ell_mat.ellmax,self.ell_mat.ellmax + 1)))
+        return ret
 
     def degrade(self, LD_shape, ellmax=None, ellmin=None):
         LD_ellmat = self.ell_mat.degrade(LD_shape)
@@ -378,12 +412,17 @@ class ffs_alm(object):
         filt_func = lambda ell: (self.filt_func(ell) & (ell <= ellmax) & (ell >= ellmin))
         return ffs_alm(LD_ellmat, filt_func=filt_func)
 
+    def get_pixwin(self):
+        return np.sqrt(self.bin_realpart_inell(self.ell_mat.get_pixwinmat()[self._cond()] ** 2))
+
     def fsky(self):
         return np.prod(self.ell_mat.lsides) / 4. / np.pi
 
     def filt_hash(self):
-        return hashlib.sha1(self.cond).hexdigest()
-
+        if self.kyfilt_func is None and self.kxfilt_func is None :
+            return  npy_hash(self.filt_func(np.arange(self.ellmax + 1)))
+        else:
+            assert 0,'implement this'
     def clone(self):
         return ffs_alm(self.ell_mat, filt_func=self.filt_func)
 
@@ -392,11 +431,11 @@ class ffs_alm(object):
 
     def rfftmap2alm(self, rfftmap):
         assert rfftmap.shape == self.ell_mat.rshape, rfftmap.shape
-        return self.fac_rfft2alm * rfftmap[self.cond[self.ell_mat()]]
+        return self.fac_rfft2alm * rfftmap[self._cond()]
 
     def almmap2alm(self, almmap):
         assert almmap.shape == self.ell_mat.rshape, almmap.shape
-        return almmap[self.cond[self.ell_mat()]]
+        return almmap[self._cond()]
 
     def map2rfft(self, _map):
         return np.fft.rfft2(_map)
@@ -410,13 +449,13 @@ class ffs_alm(object):
     def alm2rfft(self, alm):
         assert alm.size == self.alm_size, alm.size
         ret = np.zeros(self.ell_mat.rshape, dtype=complex)
-        ret[self.cond[self.ell_mat()]] = alm * self.fac_alm2rfft
+        ret[self._cond()] = alm * self.fac_alm2rfft
         return ret
 
     def alm2almmap(self, alm):
         assert alm.size == self.alm_size, alm.size
         ret = np.zeros(self.ell_mat.rshape, dtype=complex)
-        ret[self.cond[self.ell_mat()]] = alm
+        ret[self._cond()] = alm
         return ret
 
     def alm2map(self, alm, lib_almout=None):
@@ -439,8 +478,28 @@ class ffs_alm(object):
         return np.unique(self.reduced_ellmat(),
                          return_index=return_index, return_inverse=return_inverse, return_counts=return_counts)
 
-    def get_ellcounts(self):
-        return self.ell_mat.get_ellcounts() * self.cond
+    def get_Nell(self):
+        """ Analog of 2ell + 1 on the flat sky, inclusive filtering """
+        Nell = 2 * self._get_ell_counts()
+        for ell,cond in zip(self.ell_mat()[self.ell_mat.rfft2_reals()],self._cond()[self.ell_mat.rfft2_reals()]):
+            Nell[ell] -= cond
+        return Nell[:self.ellmax + 1]
+
+    def _get_ell_counts(self):
+        if self.__ellcounts is None:
+            self.__ellcounts = self._build_ell_counts()
+        return self.__ellcounts
+
+    def _build_ell_counts(self):
+        """
+        Number of non-redundant entries in freq map. for each ell, in the rfftmap.
+        Corresponds roughly to ell + 1/2.
+        """
+        weights = self._cond()
+        counts = np.bincount(self.ell_mat()[:, 1:self.ell_mat.rshape[1] - 1].flatten(), minlength=self.ell_mat.ellmax + 1,weights=weights[:, 1:self.ell_mat.rshape[1] - 1].flatten())
+        s_counts = np.bincount(self.ell_mat()[0:self.shape[0] / 2 + 1, [-1, 0]].flatten(),weights=weights[0:self.shape[0] / 2 + 1, [-1, 0]].flatten())
+        counts[0:len(s_counts)] += s_counts
+        return counts
 
     def alm2Pk_minimal(self, alm):
         """
@@ -482,20 +541,20 @@ class ffs_alm(object):
         return alm * self.almmap2alm(np.outer(w0, w1))
 
     def get_kx(self):
-        return self.ell_mat.get_kx_mat()[self.cond[self.ell_mat()]]
+        return self.ell_mat.get_kx_mat()[self._cond()]
 
     def get_ky(self):
-        return self.ell_mat.get_ky_mat()[self.cond[self.ell_mat()]]
+        return self.ell_mat.get_ky_mat()[self._cond()]
 
     def get_ikx(self):
-        return self.ell_mat.get_ikx_mat()[self.cond[self.ell_mat()]]
+        return self.ell_mat.get_ikx_mat()[self._cond()]
 
     def get_iky(self):
-        return self.ell_mat.get_iky_mat()[self.cond[self.ell_mat()]]
+        return self.ell_mat.get_iky_mat()[self._cond()]
 
     def get_cossin_2iphi(self):
         cos, sin = self.ell_mat.get_cossin_2iphi_mat()
-        return cos[self.cond[self.ell_mat()]], sin[self.cond[self.ell_mat()]]
+        return cos[self._cond()], sin[self._cond()]
 
     def alm2rlm(self, alm):
         assert alm.size == self.alm_size, alm.size
@@ -530,19 +589,23 @@ class ffs_alm(object):
         return alm
 
     def map2cl(self, map1, map2=None, ellmax=None):
-        ellmax = ellmax or self.ellmax
-        return self.ell_mat.map2cl(map1, map2=map2)[:ellmax + 1]
+        return self.alm2cl(self.map2alm(map1),alm2= None if map2 is None else self.map2alm(map2))[:(ellmax or self.ellmax) + 1]
 
     def alm2cl(self, alm, alm2=None, ellmax=None):
-        ellmax = ellmax or self.ellmax
         assert alm.size == self.alm_size, (alm.size, self.alm_size)
-        if alm2 is None:
-            return self.ell_mat.rfft2cl(self.alm2rfft(alm))[0:ellmax + 1]
-        assert alm2.size == self.alm_size, (alm.size, self.alm_size)
-        return self.ell_mat.rfft2cl(self.alm2rfft(alm), rfftmap2=self.alm2rfft(alm2))[0:ellmax + 1]
+        if alm2 is not None: assert alm2.size == self.alm_size, (alm2.size, self.alm_size)
+        return self.bin_realpart_inell(np.abs(alm) ** 2 if alm2 is None else (alm * np.conjugate(alm2)).real,ellmax=ellmax)
 
-    def bin_realpart_inell(self, alm):
-        return self.ell_mat.bin_inell(self.alm2almmap(alm).real)[0:self.ellmax + 1]
+    def bin_realpart_inell(self,alm,ellmax = None):
+        #FIXME: dont go to full rfft
+        assert alm.size == self.alm_size, (alm.size, self.alm_size)
+        weights = self.alm2almmap(alm).real
+        Cl = np.bincount(self.ell_mat()[:, 1:self.ell_mat.rshape[1] - 1].flatten(),
+                         weights=weights[:, 1:self.ell_mat.rshape[1] - 1].flatten(), minlength=self.ell_mat.ellmax + 1)
+        Cl += np.bincount(self.ell_mat()[0:self.shape[0] / 2 + 1, [-1, 0]].flatten(),
+                          weights=weights[0:self.shape[0] / 2 + 1, [-1, 0]].flatten(), minlength=self.ell_mat.ellmax + 1)
+        Cl[np.where(self._get_ell_counts())] /= self._get_ell_counts()[np.where(self._get_ell_counts())]
+        return Cl[:(ellmax or self.ellmax) + 1]
 
     def udgrade(self, lib_alm, alm):
         """
@@ -589,9 +652,6 @@ class ffs_alm(object):
         cos, sin = self.get_cossin_2iphi()
         return np.array([TEBlms[0], cos * TEBlms[1] - sin * TEBlms[2], sin * TEBlms[1] + cos * TEBlms[2]])
 
-    def extend(self, filt_func):
-        return ffs_alm(self.ell_mat, filt_func=filt_func)
-
 
 class ffs_lib_phas(sims_generic.sim_lib):
     """
@@ -632,46 +692,50 @@ class ffs_alm_pyFFTW(ffs_alm):
     Same as ffs_alm but ffts are done with much faster (10 x !) threaded fftw library.
     """
 
-    def __init__(self, ellmat, filt_func=lambda ell: ell > 0, num_threads=4, flags_init=('FFTW_MEASURE',)):
+    def __init__(self, ellmat, filt_func=lambda ell: ell > 0, num_threads=int(os.environ.get('OMP_NUM_THREADS', 1)), flags_init=('FFTW_MEASURE',)):
         super(ffs_alm_pyFFTW, self).__init__(ellmat, filt_func=filt_func)
-        # FIXME : This can be tricky in in hybrid MPI-OPENMP
+        # FIXME : This can be tricky in in hybrid MPI-OPENMP, or calling from difference machines
         # Builds FFTW Wisdom :
-        wisdom_fname = self.ell_mat.lib_dir + '/FFTW_wisdom_%s_%s.npy' % (num_threads, ''.join(flags_init))
-        if not os.path.exists(wisdom_fname):
-            print "++ ffs_alm_pyFFTW :: building and caching FFTW wisdom, this might take a little while..."
-            if pbs.rank == 0:
-                inpt = np.empty(self.ell_mat.shape, dtype=float)
-                oupt = np.empty(self.ell_mat.rshape, dtype=complex)
-                fft = pyfftw.FFTW(inpt, oupt, axes=(0, 1), direction='FFTW_FORWARD', flags=flags_init,
-                                  threads=num_threads)
-                ifft = pyfftw.FFTW(oupt, inpt, axes=(0, 1), direction='FFTW_BACKWARD', flags=flags_init,
-                                   threads=num_threads)
-                wisdom = pyfftw.export_wisdom()
-                np.save(wisdom_fname, wisdom)
-                del inpt, oupt, fft, ifft
-            pbs.barrier()
-            pyfftw.import_wisdom(np.load(wisdom_fname))
-            print "++ ffs_alm_pyFFTW :: loaded widsom ", wisdom_fname
-        # self.flags = ('FFTW_WISDOM_ONLY',)
-        self.flags = ()
+        #wisdom_fname = self.ell_mat.lib_dir + '/FFTW_wisdom_%s_%s.npy' % (num_threads, ''.join(flags_init))
+        #if not os.path.exists(wisdom_fname):
+        #    print "++ ffs_alm_pyFFTW :: building and caching FFTW wisdom, this might take a little while..."
+        #    if pbs.rank == 0:
+        #        inpt = pyfftw.empty_aligned(self.ell_mat.shape, dtype='float64')
+        #        oupt = pyfftw.empty_aligned(self.ell_mat.rshape, dtype='complex128')
+        #        fft = pyfftw.FFTW(inpt, oupt, axes=(0, 1), direction='FFTW_FORWARD', flags=flags_init,
+        #                          threads=num_threads)
+        #        ifft = pyfftw.FFTW(oupt, inpt, axes=(0, 1), direction='FFTW_BACKWARD', flags=flags_init,
+        #                           threads=num_threads)
+        #        wisdom = pyfftw.export_wisdom()
+        #        np.save(wisdom_fname, wisdom)
+        #        del inpt, oupt, fft, ifft
+        #    pbs.barrier()
+        #pyfftw.import_wisdom(np.load(wisdom_fname))
+        # print "++ ffs_alm_pyFFTW :: loaded widsom ", wisdom_fname
+        #self.flags = ('FFTW_WISDOM_ONLY',)  # This will make the code crash if arrays are not properly aligned.
+        self.flags = flags_init
         self.threads = num_threads
 
+    def alm2rfft(self, alm):
+        assert alm.size == self.alm_size, alm.size
+        ret = pyfftw.zeros_aligned(self.ell_mat.rshape, dtype='complex128')
+        ret[self._cond()] = alm * self.fac_alm2rfft
+        return ret
+
     def map2rfft(self, _map):
-        oupt = np.empty(self.ell_mat.rshape, dtype=complex)
-        fft = pyfftw.FFTW(_map, oupt, axes=(0, 1), direction='FFTW_FORWARD', flags=self.flags, threads=self.threads)
-        fft()
-        return oupt
+        inpt = pyfftw.empty_aligned(self.ell_mat.shape, dtype='float64')
+        oupt = pyfftw.empty_aligned(self.ell_mat.rshape, dtype='complex128')
+        fft = pyfftw.FFTW(inpt, oupt, axes=(0, 1), direction='FFTW_FORWARD', flags=self.flags, threads=self.threads)
+        return fft(pyfftw.byte_align(_map, dtype='float64'))
 
     def alm2map(self, alm, lib_almout=None):
         assert alm.size == self.alm_size, (alm.size, self.alm_size)
         if lib_almout is None:
-            rfftalm = self.alm2rfft(alm)
-            oupt = np.empty(self.ell_mat.shape, dtype=float)
-            ifft = pyfftw.FFTW(rfftalm, oupt, axes=(0, 1), direction='FFTW_BACKWARD', flags=self.flags,
-                               threads=self.threads)
-            ifft()
-            return oupt
+            oupt = pyfftw.empty_aligned(self.ell_mat.shape, dtype='float64')
+            inpt = pyfftw.empty_aligned(self.ell_mat.rshape, dtype='complex128')
 
+            ifft = pyfftw.FFTW(inpt, oupt, axes=(0, 1), direction='FFTW_BACKWARD', flags=self.flags, threads=self.threads)
+            return ifft(pyfftw.byte_align(self.alm2rfft(alm), dtype='complex128'))
         else:
             return lib_almout.alm2map(lib_almout.udgrade(self, alm))
 
@@ -685,6 +749,3 @@ class ffs_alm_pyFFTW(ffs_alm):
         filt_func = lambda ell: (self.filt_func(ell) & (ell <= ellmax) & (ell >= ellmin))
         num_threads = self.threads if num_threads is None else num_threads
         return ffs_alm_pyFFTW(LD_ellmat, filt_func=filt_func, num_threads=num_threads)
-
-    def extend(self, filt_func):
-        return ffs_alm_pyFFTW(self.ell_mat, filt_func=filt_func, num_threads=self.threads)

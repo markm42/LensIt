@@ -11,3 +11,4 @@ import multigrid
 import chain_samples
 import opfilt_cinv
 import opfilt_cinv_noBB
+import ffs_ninv_filt # Mark added
