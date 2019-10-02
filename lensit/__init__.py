@@ -181,9 +181,8 @@ def get_isocov(exp, LD_res, HD_res=14, pyFFTWthreads=int(os.environ.get('OMP_NUM
 
 """
 def get_config(exp):
-    """Returns noise levels, beam size and multipole cuts for some configurations
+    #Returns noise levels, beam size and multipole cuts for some configurations
 
-    """
     sN_uKaminP = None
     if exp == 'Planck':
         sN_uKamin = 35.
