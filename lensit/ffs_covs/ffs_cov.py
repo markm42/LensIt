@@ -564,7 +564,7 @@ class ffs_diagcov_alm(object):
     def get_iblms(self, _type, datalms, use_cls_len=True, use_Pool=0, **kwargs):
         """
          Returns P^{-1} maximum likelihood sky CMB modes.
-         (inputs to quadratc estimator routines)
+         (inputs to quadratic estimator routines)
         """
         if datalms.shape == ((len(_type), self.dat_shape[0], self.dat_shape[1])):
             _datalms = np.array([self.lib_datalm.map2alm(_m) for _m in datalms])
@@ -647,7 +647,8 @@ class ffs_diagcov_alm(object):
     def apply_condpseudiagcl(self, _type, alms, use_Pool=0):
         return self.apply_conddiagcl(_type, alms, use_Pool=use_Pool)
 
-    def get_qlms(self, _type, iblms, lib_qlm, use_cls_len=True, **kwargs):
+    #def get_qlms(self, _type, iblms, lib_qlm, use_cls_len=True, **kwargs):
+    def get_qlms(self, _type, iblms, lib_qlm, use_cls_len=True, iblms2=None, **kwargs):
         """
         Unormalized quadratic estimates (potential and curl).
         Input are max. likelihood sky_alms, given by B^t F^t Cov^{-1} = P^{-1} (...)
@@ -673,7 +674,11 @@ class ffs_diagcov_alm(object):
         clms = np.zeros((len(_type), self.lib_skyalm.alm_size), dtype=complex)
         for _i in range(len(_type)):
             for _j in range(len(_type)):
-                clms[_i] += get_unlPmat_ij(_type, self.lib_skyalm, weights_cls, _i, _j) * iblms[_j]
+                #clms[_i] += get_unlPmat_ij(_type, self.lib_skyalm, weights_cls, _i, _j) * iblms[_j]
+                if iblms2 is None:
+                    clms[_i] += get_unlPmat_ij(_type, self.lib_skyalm, weights_cls, _i, _j) * iblms[_j]
+                else:
+                    clms[_i] += get_unlPmat_ij(_type, self.lib_skyalm, weights_cls, _i, _j) * iblms2[_j]
 
         t.checkpoint("  get_qlms::mult with %s Pmat" % ({True: 'len', False: 'unl'}[use_cls_len]))
 
@@ -851,7 +856,7 @@ class ffs_diagcov_alm(object):
         assert _type in _types, (_type, _types)
         Rpp, ROO = self.get_qlm_resprlm(_type, lib_qlm, use_cls_len=use_cls_len, cls_obs=cls_obs)
         return (lib_qlm.alm2Pk_minimal(np.sqrt(2 * Rpp)), lib_qlm.alm2Pk_minimal(np.sqrt(2 * ROO)))
-
+    
     def get_response(self, _type, lib_qlm, use_cls_len=True, cls_weights=None, cls_filt=None, cls_cmb=None):
         """
         Lensing quadratic estimator gradient and curl response functions.
@@ -2058,7 +2063,6 @@ class ffs_lencov_alm(ffs_diagcov_alm):
             ret[i] = self._upg(temp)
         return ret
 
-
     def get_MLlms(self, _type, datmaps, use_Pool=0, use_cls_len=False, **kwargs):
         """
         Returns maximum likelihood sky CMB modes. (P D^t B^t F^t Cov^-1 = (P^-1 + B^F^t N^{-1} F B)^{-1} F B N^{-1} d)
@@ -2106,7 +2110,12 @@ class ffs_lencov_alm(ffs_diagcov_alm):
         cls = self.cls_len if use_cls_len else self.cls_unl
         almsky1 = np.empty((len(_type), self.lib_skyalm.alm_size), dtype=complex)
 
-        Bu = lambda idx: self.lib_skyalm.alm2map(iblms[idx])
+        #Bu = lambda idx: self.lib_skyalm.alm2map(iblms[idx]) # to get cl_phi from different maps, iblms needs to be different here
+        if iblms2 is None:
+			Bu = lambda idx: self.lib_skyalm.alm2map(iblms[idx]) # to get cl_phi from different maps, iblms needs to be different here
+        else:
+			Bu = lambda idx: self.lib_skyalm.alm2map(iblms2[idx]) # to get cl_phi from different maps, iblms needs to be different here
+			
         _2qlm = lambda _m: lib_qlm.udgrade(self.lib_skyalm, self.lib_skyalm.map2alm(_m))
 
         def DxiDt(alms, axis):

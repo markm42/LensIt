@@ -7,9 +7,10 @@ import lensit as fs
 from lensit import pbs
 from lensit.misc.misc_utils import npy_hash
 
-verbose = False
+verbose = True
 
 def get_fields(cls):
+    print cls.keys()
     fields = ['p', 't', 'e', 'b', 'o']
     ret = ['p', 't', 'e', 'b', 'o']
     for _f in fields:
@@ -44,7 +45,7 @@ class sim_cmb_unl():
 
         self._cl_hash = {}
         for _k, cl in cls_unl.iteritems():
-            self._cl_hash[_k] = npy_hash(cl[lib_alm.ellmin:lib_alm.ellmax + 1])
+            self._cl_hash[_k] = hashlib.sha1(cl[lib_alm.ellmin:lib_alm.ellmax + 1].copy(order = 'C')).hexdigest()
         self.rmat = rmat
         self.lib_pha = lib_pha
         self.lib_skyalm = self.lib_pha.lib_alm
@@ -143,6 +144,98 @@ class sims_cmb_len():
             return fs.ffs_deflect.ffs_deflect.displacement_fromplm(self.lib_skyalm, plm)
         elif 'o' in self.unlcmbs.fields:
             olm = self.get_sim_olm(idx)
+            return fs.ffs_deflect.ffs_deflect.displacement_fromolm(self.lib_skyalm, olm)
+        else:
+            assert 0
+
+    def get_sim_alm(self, idx, field):
+        if field == 't':
+            return self.get_sim_tlm(idx)
+        elif field == 'p':
+            return self.get_sim_plm(idx)
+        elif field == 'o':
+            return self.get_sim_olm(idx)
+        elif field == 'q':
+            return self.get_sim_qulm(idx)[0]
+        elif field == 'u':
+            return self.get_sim_qulm(idx)[1]
+        elif field == 'e':
+            return self.lib_skyalm.QUlms2EBalms(self.get_sim_qulm(idx))[0]
+        elif field == 'b':
+            return self.lib_skyalm.QUlms2EBalms(self.get_sim_qulm(idx))[1]
+        else:
+            assert 0, (field, self.fields)
+
+    def get_sim_tlm(self, idx):
+        fname = self.lib_dir + '/sim_%04d_tlm.npy' % idx
+        if not os.path.exists(fname):
+            Tlm = self._get_f(idx).lens_alm(self.lib_skyalm, self.unlcmbs.get_sim_tlm(idx), use_Pool=self.Pool)
+            if not self.cache_lens: return Tlm
+            np.save(fname, Tlm)
+        return np.load(fname)
+
+    def get_sim_qulm(self, idx):
+        fname = self.lib_dir + '/sim_%04d_qulm.npy' % idx
+        if not os.path.exists(fname):
+            Qlm, Ulm = self.lib_skyalm.EBlms2QUalms(
+                np.array([self.unlcmbs.get_sim_elm(idx), self.unlcmbs.get_sim_blm(idx)]))
+            f = self._get_f(idx)
+            Qlm = f.lens_alm(self.lib_skyalm, Qlm, use_Pool=self.Pool)
+            Ulm = f.lens_alm(self.lib_skyalm, Ulm, use_Pool=self.Pool)
+            if not self.cache_lens: return np.array([Qlm, Ulm])
+            np.save(fname, np.array([Qlm, Ulm]))
+        return np.load(fname)
+
+
+    
+class sims_cmb_len_for_MCN1():
+    def __init__(self, lib_dir, lib_skyalm, cls_unl, lib_pha=None, use_Pool=0, cache_lens=False):
+        if not os.path.exists(lib_dir) and pbs.rank == 0:
+            os.makedirs(lib_dir)
+        pbs.barrier()
+        self.lib_skyalm = lib_skyalm
+        fields = get_fields(cls_unl)
+        if lib_pha is None and pbs.rank == 0:
+            lib_pha = fs.sims.ffs_phas.ffs_lib_phas(lib_dir + '/phas', len(fields), lib_skyalm)
+        else:  # Check that the lib_alms are compatible :
+            assert lib_pha.lib_alm == lib_skyalm
+        pbs.barrier()
+
+        self.unlcmbs = sim_cmb_unl(cls_unl, lib_pha)
+        self.Pool = use_Pool
+        self.cache_lens = cache_lens
+        if not os.path.exists(lib_dir + '/sim_hash.pk') and pbs.rank == 0:
+            pk.dump(self.hashdict(), open(lib_dir + '/sim_hash.pk', 'w'))
+        pbs.barrier()
+        fs.sims.sims_generic.hash_check(self.hashdict(), pk.load(open(lib_dir + '/sim_hash.pk', 'r')))
+        self.lib_dir = lib_dir
+        self.fields = fields
+
+    def hashdict(self):
+        return {'unl_cmbs': self.unlcmbs.hashdict()}
+
+    def is_full(self):
+        return self.unlcmbs.lib_pha.is_full()
+
+    def get_sim_plm(self, idx):
+        return self.unlcmbs.get_sim_plm(idx)
+
+    def get_sim_olm(self, idx):
+        return self.unlcmbs.get_sim_olm(idx)
+
+    def _get_f(self, idx):
+        if 'p' in self.unlcmbs.fields and 'o' in self.unlcmbs.fields:
+            plm = self.get_sim_plm(idx-idx%2)
+            olm = self.get_sim_olm(idx-idx%2)
+            print 'Lensing for MCN1. For fields with index {}, the lensing ptential used is {}.'.format(idx,idx-idx%2)
+            return fs.ffs_deflect.ffs_deflect.displacement_frompolm(self.lib_skyalm, plm, olm)
+        elif 'p' in self.unlcmbs.fields:
+            plm = self.get_sim_plm(idx-idx%2)
+            print 'Lensing for MCN1. For fields with index {}, the lensing ptential used is {}.'.format(idx,idx-idx%2)
+            return fs.ffs_deflect.ffs_deflect.displacement_fromplm(self.lib_skyalm, plm)
+        elif 'o' in self.unlcmbs.fields:
+            olm = self.get_sim_olm(idx-idx%2)
+            print 'Lensing for MCN1. For fields with index {}, the lensing ptential used is {}.'.format(idx,idx-idx%2)
             return fs.ffs_deflect.ffs_deflect.displacement_fromolm(self.lib_skyalm, olm)
         else:
             assert 0

@@ -85,7 +85,14 @@ class ffs_displacement(object):
         self.lsides = tuple(lsides)
         self.rmin = (1. * np.array(self.lsides)) / np.array(self.shape)
 
-        HD_res = Log2ofPowerof2(self.shape)
+        try:
+            HD_res = Log2ofPowerof2(self.shape)
+            po2 = 1
+        except Exception as e:
+            print 'Exception error: ',e
+            HD_res = self.shape
+            po2 = 0
+            
         LD_res = LD_res or HD_res
         self.HD_res = (HD_res[0], HD_res[1])
         self.LD_res = (min(LD_res[0], HD_res[0]), min(LD_res[1], HD_res[1]))
@@ -196,7 +203,10 @@ class ffs_displacement(object):
 
     def get_dxdy_chk_N(self, N, buffers=None):
         if buffers is None: buffers = self.buffers
-        shape = (2 ** self.LD_res[0] + 2 * buffers[0], 2 ** self.LD_res[1] + 2 * buffers[1])
+        if self.LD_res[0]<100:
+            shape = (2 ** self.LD_res[0] + 2 * buffers[0], 2 ** self.LD_res[1] + 2 * buffers[1])
+        else:
+            shape = (self.LD_res[0] + 2 * buffers[0], self.LD_res[1] + 2 * buffers[1])
         dx, dy = np.zeros(shape), np.zeros(shape)
         spliter_lib = map_spliter.periodicmap_spliter()  # library to split periodic maps.
         sLDs, sHDs = spliter_lib.get_slices_chk_N(N, self.LD_res, self.HD_res, buffers)
@@ -267,9 +277,14 @@ class ffs_displacement(object):
             assert np.all(np.array(buffers) > (np.array(self.buffers) + 5.)), (buffers, self.buffers)
             Nchunks = 2 ** (np.sum(np.array(self.HD_res) - np.array(LD_res)))
             lensed_map = np.empty(self.shape)  # Output
-            dx_N = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
-            dy_N = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
-            unl_CMBN = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
+            if LD_res[0]<100:
+                dx_N = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
+                dy_N = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
+                unl_CMBN = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
+            else:
+                dx_N = np.empty((LD_res[0] + 2 * buffers[0], LD_res[1] + 2 * buffers[1]))
+                dy_N = np.empty((LD_res[0] + 2 * buffers[0], LD_res[1] + 2 * buffers[1]))
+                unl_CMBN = np.empty((LD_res[0] + 2 * buffers[0], LD_res[1] + 2 * buffers[1]))
             if self.verbose:
                 print '++ lensing map :' \
                       '   splitting map on GPU , chunk shape %s, buffers %s' % (dx_N.shape, buffers)
@@ -624,8 +639,12 @@ class ffs_displacement(object):
                 LD_res, buffers = get_GPUbuffers(GPU_res)
                 assert np.all(np.array(buffers) > (np.array(self.buffers) + 5.)), (buffers, self.buffers)
                 Nchunks = 2 ** (np.sum(np.array(self.HD_res) - np.array(LD_res)))
-                dx_N = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
-                dy_N = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
+                if LD_res[0]<100:
+                    dx_N = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
+                    dy_N = np.empty((2 ** LD_res[0] + 2 * buffers[0], 2 ** LD_res[1] + 2 * buffers[1]))
+                else:
+                    dx_N = np.empty((LD_res[0] + 2 * buffers[0], LD_res[1] + 2 * buffers[1]))
+                    dy_N = np.empty((LD_res[0] + 2 * buffers[0], LD_res[1] + 2 * buffers[1]))
                 if self.verbose:
                     print '++ inverse displacement :' \
                           '   splitting inverse on GPU , chunk shape %s, buffers %s' % (dx_N.shape, buffers)

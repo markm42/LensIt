@@ -150,6 +150,7 @@ class multigrid_chain:
             self.prev_eps = eps
             self.prev_elapsed = elapsed
 
+
     def log_cache(self, stage, iter, eps, soltn=None, cache_cond=lambda it:it%5==0, **kwargs):
         #Same as above but caches soltn every 5 iterations
         self.iter_tot += 1
