@@ -176,7 +176,7 @@ def lens_eblm(elm,dlm,blm = None,nside = 2048,lmaxout = None,verbose = True,nban
     return hp.map2alm_spin([lenmap.real, lenmap.imag], 2, lmax = (lmaxout or hp.Alm.getlmax(elm.size)))
 
 #====== Mains :
-def lens_gcband_sym(spin,glm, th1, th2, Nt, xxx_todo_changeme, xxx_todo_changeme1,clm = None, Nphi=2 ** 14):
+def lens_gcband_sym(spin,glm, th1, th2, Nt, (tnewN, phinewN), (tnewS, phinewS),clm = None, Nphi=2 ** 14):
     """
     Returns deflected maps between a co-latitude range in the North Hemisphere and its South hemisphere correspondant.
     :param spin: spin of the field described by gradient glm and curl clm mode.
@@ -192,8 +192,6 @@ def lens_gcband_sym(spin,glm, th1, th2, Nt, xxx_todo_changeme, xxx_todo_changeme
 
     NB : This routine performs the deflection only, and not the parallel-transport rotation of the axes.
     """
-    (tnewN, phinewN) = xxx_todo_changeme
-    (tnewS, phinewS) = xxx_todo_changeme1
     assert len(tnewN) == len(phinewN) and len(tnewS) == len(phinewS),(len(tnewN),len(phinewN),len(tnewS),len(phinewS))
     tgrid = thgrid(th1, th2).mktgrid(Nt)
 
@@ -225,13 +223,11 @@ def lens_gcband_sym(spin,glm, th1, th2, Nt, xxx_todo_changeme, xxx_todo_changeme
         weave.inline(bicubicspline, ['lenmap', 'filtmap', 'phinew', 'tnew', 'npix', 'Nx', 'Ny'], headers=[header])
     return lenmapNR,lenmapNI,lenmapSR,lenmapSI
 
-def lens_band_sym(glm,th1,th2,Nt, xxx_todo_changeme2, xxx_todo_changeme3,Nphi = 2 ** 14):
+def lens_band_sym(glm,th1,th2,Nt,(tnewN,phinewN),(tnewS,phinewS),Nphi = 2 ** 14):
     """
     Same as lens_gcband_sym for spin 0 field, where maps are real.
     Note that in the adopted conventions tlm = -glm for temperature maps.
     """
-    (tnewN,phinewN) = xxx_todo_changeme2
-    (tnewS,phinewS) = xxx_todo_changeme3
     assert len(tnewN) == len(phinewN) and len(tnewS) == len(phinewS)
     tgrid = thgrid(th1,th2).mktgrid(Nt)
 
@@ -260,12 +256,10 @@ def lens_band_sym(glm,th1,th2,Nt, xxx_todo_changeme2, xxx_todo_changeme3,Nphi = 
     return lenmapN,lenmapS
 
 
-def lens_band_sym_timed(glm, th1, th2, Nt, xxx_todo_changeme4, xxx_todo_changeme5, Nphi=2 ** 14):
+def lens_band_sym_timed(glm, th1, th2, Nt, (tnewN, phinewN), (tnewS, phinewS), Nphi=2 ** 14):
     """
     Same as lens_band_sym with some more timing info.
     """
-    (tnewN, phinewN) = xxx_todo_changeme4
-    (tnewS, phinewS) = xxx_todo_changeme5
     assert len(tnewN) == len(phinewN) and len(tnewS) == len(phinewS)
 
     tgrid = thgrid(th1, th2).mktgrid(Nt)
@@ -296,12 +290,10 @@ def lens_band_sym_timed(glm, th1, th2, Nt, xxx_todo_changeme4, xxx_todo_changeme
     times['interp'] = time.time() - t0
     return lenmapN, lenmapS,times
 
-def gclm2lensmap_symband_timed(spin, glm, th1, th2, Nt, xxx_todo_changeme6, xxx_todo_changeme7, clm = None, Nphi=2 ** 14):
+def gclm2lensmap_symband_timed(spin, glm, th1, th2, Nt, (tnewN, phinewN), (tnewS, phinewS), clm = None, Nphi=2 ** 14):
     """
     Same as lens_gcband_sym with some more timing info.
     """
-    (tnewN, phinewN) = xxx_todo_changeme6
-    (tnewS, phinewS) = xxx_todo_changeme7
     assert len(tnewN) == len(phinewN) and len(tnewS) == len(phinewS)
     tgrid = thgrid(th1, th2).mktgrid(Nt)
     times = {}
@@ -336,12 +328,10 @@ def gclm2lensmap_symband_timed(spin, glm, th1, th2, Nt, xxx_todo_changeme6, xxx_
     times['interp'] = time.time() - t0
     return lenmapNR,lenmapNI,lenmapSR,lenmapSI,times
 
-def lensgclm_symband_timed(spin,glm, th1, th2, Nt, xxx_todo_changeme8, xxx_todo_changeme9,clm = None, Nphi=2 ** 14):
+def lensgclm_symband_timed(spin,glm, th1, th2, Nt, (tnewN, phinewN), (tnewS, phinewS),clm = None, Nphi=2 ** 14):
     """
     Same as lens_gcband_sym with some more timing info.
     """
-    (tnewN, phinewN) = xxx_todo_changeme8
-    (tnewS, phinewS) = xxx_todo_changeme9
     assert len(tnewN) == len(phinewN) and len(tnewS) == len(phinewS)
     tgrid = thgrid(th1, th2).mktgrid(Nt)
     times = {}
@@ -377,14 +367,13 @@ def lensgclm_symband_timed(spin,glm, th1, th2, Nt, xxx_todo_changeme8, xxx_todo_
     return lenmapNR,lenmapNI,lenmapSR,lenmapSI,times
 
 
-def _buildangles(xxx_todo_changeme10, Red,Imd):
+def _buildangles((tht,phi), Red,Imd):
     """
     e.g.
         Redtot, Imdtot = hp.alm2map_spin([dlm, np.zeros_like(dlm)], nside, 1, hp.Alm.getlmax(dlm.size))
         pix = hp.query_strip(nside, th1, np.max(tht_patch), inclusive=True)
         costnew,phinew = buildangles(hp.pix2ang(nside, pix),Redtot[pix],Imdtot[pix])
     """
-    (tht,phi) = xxx_todo_changeme10
     costnew = np.cos(tht)
     phinew = phi.copy()
     norm = np.sqrt(Red ** 2 + Imd ** 2)
@@ -478,13 +467,13 @@ def lens_glm_sym_timed(spin,dlm,glm,nside,nband = 32,facres = 0,clm = None,rotpo
     t.checkpoint('healpy Spin 1 transform for displacement (full %s map)' % nside)
     _Npix = 0 # Total number of pixels used for interpolation
     def coadd_times(tim):
-        for _k,_t in tim.items():
+        for _k,_t in tim.iteritems():
             if _k not in times :
                 times[_k] = _t
             else : times[_k] += _t
 
-    for ib,th1,th2 in zip(list(range(nband)),th1s,th2s):
-        print("BAND %s in %s :"%(ib,nband))
+    for ib,th1,th2 in zip(range(nband),th1s,th2s):
+        print "BAND %s in %s :"%(ib,nband)
         t0 = time.time()
         pixN = hp.query_strip(nside, th1, th2, inclusive=True)
         pixS = hp.query_strip(nside, np.pi- th2,np.pi - th1, inclusive=True)
@@ -504,12 +493,12 @@ def lens_glm_sym_timed(spin,dlm,glm,nside,nband = 32,facres = 0,clm = None,rotpo
 
         #print "min max tnew (degrees) in the band %.3f %.3f "%(_th1 /np.pi * 180.,_th2 /np.pi * 180.)
         #==== these are the theta and limits. It is ok to go negative or > 180
-        print('input t1,t2 %.3f %.3f in degrees'%(_thup /np.pi * 180,_thdown/np.pi * 180.))
-        print('North %.3f and South %.3f buffers in amin'%(buffN /np.pi * 180 * 60,buffS/np.pi * 180. * 60.))
+        print 'input t1,t2 %.3f %.3f in degrees'%(_thup /np.pi * 180,_thdown/np.pi * 180.)
+        print 'North %.3f and South %.3f buffers in amin'%(buffN /np.pi * 180 * 60,buffS/np.pi * 180. * 60.)
         Nphi = get_Nphi(_thup, _thdown, facres=facres)
         dphi_patch = (2. * np.pi) / Nphi * max(np.sin(_thup),np.sin(_thdown))
         dth_patch = (_thdown - _thup) / (Nt_perband -1)
-        print("cell (theta,phi) in amin (%.3f,%.3f)" % (dth_patch / np.pi * 60. * 180, dphi_patch / np.pi * 60. * 180))
+        print "cell (theta,phi) in amin (%.3f,%.3f)" % (dth_patch / np.pi * 60. * 180, dphi_patch / np.pi * 60. * 180)
         times['dx,dy band split'] += time.time() - t0
         if spin == 0:
             lenN,lenS,tim = lens_band_sym_timed(glm,_thup,_thdown,Nt_perband,(tnewN,phinewN),(tnewS,phinewS),Nphi=Nphi)
@@ -531,14 +520,14 @@ def lens_glm_sym_timed(spin,dlm,glm,nside,nband = 32,facres = 0,clm = None,rotpo
         _Npix += 2 * Nt_perband * Nphi
     t.checkpoint('Total exec. time')
 
-    print("STATS for lmax tlm %s lmax dlm %s"%(hp.Alm.getlmax(glm.size),hp.Alm.getlmax(dlm.size)))
+    print "STATS for lmax tlm %s lmax dlm %s"%(hp.Alm.getlmax(glm.size),hp.Alm.getlmax(dlm.size))
     tot= 0.
-    for _k,_t in times.items() :
-        print('%20s: %.2f'%(_k,_t))
+    for _k,_t in times.iteritems() :
+        print '%20s: %.2f'%(_k,_t)
         tot += _t
-    print("%20s: %2.f sec."%('tot',tot))
-    print("%20s: %2.f sec."%('excl. defl. angle calc.',tot - times['dx,dy (full sky)']-times['dx,dy band split']))
-    print('%20s: %s = %.1f^2'%('Tot. int. pix.',int(_Npix),np.sqrt(_Npix * 1.)))
+    print "%20s: %2.f sec."%('tot',tot)
+    print "%20s: %2.f sec."%('excl. defl. angle calc.',tot - times['dx,dy (full sky)']-times['dx,dy band split'])
+    print '%20s: %s = %.1f^2'%('Tot. int. pix.',int(_Npix),np.sqrt(_Npix * 1.))
 
     return ret
 
@@ -566,7 +555,7 @@ def lens_glm_GLth_sym_timed(spin,dlm,glm,lmax_target,
     times['vtmdefl'] = 0.
 
     def coadd_times(tim):
-        for _k,_t in tim.items():
+        for _k,_t in tim.iteritems():
             if _k not in times :
                 times[_k] = _t
             else : times[_k] += _t
@@ -581,8 +570,8 @@ def lens_glm_GLth_sym_timed(spin,dlm,glm,lmax_target,
     wisdomhash = str(lmax_target) + '_' + str(nband) + '_' + str(facres + 1000) + '.npy'
     assert os.path.exists(os.path.dirname(os.path.realpath(__file__)) + '/pyfftw_cache/')
     t0 = time.time()
-    print("building and caching FFTW wisdom, this might take a while")
-    for ib,th1,th2 in zip(list(range(nband)),th1s,th2s):
+    print "building and caching FFTW wisdom, this might take a while"
+    for ib,th1,th2 in zip(range(nband),th1s,th2s):
         Np = get_Nphi(th1,th2, facres=facres,target_amin =60. * 90. / target_nt) # same spacing as theta grid
         Np_d = min(get_Nphi(th1,th2,target_amin = 180. * 60. / lmax_target),2 * lmax_target) #Equator point density
         pixN, = np.where((tGL >= th1) & (tGL <= th2))
@@ -593,8 +582,8 @@ def lens_glm_GLth_sym_timed(spin,dlm,glm,lmax_target,
         tGLNs.append(tGL[pixN])
         tGLSs.append(tGL[pixS])
         wgs.append(np.concatenate([wg[pixN],wg[pixS]]))
-        print("BAND %s in %s. deflection    (%s x %s) pts "%(ib,nband,len(pixN),Np_d))
-        print("               interpolation (%s x %s) pts "%(Nt,Np))
+        print "BAND %s in %s. deflection    (%s x %s) pts "%(ib,nband,len(pixN),Np_d)
+        print "               interpolation (%s x %s) pts "%(Nt,Np)
         #==== For each block we have the following ffts:
         # (Np_d) complex to complex (deflection map) BACKWARD (vtm2map)
         # (Nt,Np) complex to complex (bicubic prefiltering) BACKWARD (vt2mmap) (4 threads)
@@ -618,12 +607,12 @@ def lens_glm_GLth_sym_timed(spin,dlm,glm,lmax_target,
     pyfftw.import_wisdom(np.load(os.path.dirname(os.path.realpath(__file__)) + '/pyfftw_cache/' + wisdomhash))
     shts.PYFFTWFLAGS = ['FFTW_WISDOM_ONLY']
     times['pyfftw_caches'] = time.time() -t0
-    print("Total number of interpo points: %s = %s ** 2"%(np.sum([np.prod(s) for s in shapes]),np.sqrt(1. * np.sum([np.prod(s) for s in shapes]))))
-    print("Total number of deflect points: %s = %s ** 2"%(np.sum([np.prod(s) for s in shapes_d]),np.sqrt(1. * np.sum([np.prod(s) for s in shapes_d]))))
+    print "Total number of interpo points: %s = %s ** 2"%(np.sum([np.prod(s) for s in shapes]),np.sqrt(1. * np.sum([np.prod(s) for s in shapes])))
+    print "Total number of deflect points: %s = %s ** 2"%(np.sum([np.prod(s) for s in shapes_d]),np.sqrt(1. * np.sum([np.prod(s) for s in shapes_d])))
 
     glmout = np.zeros(shts.util.lmax2nlm(lmax_target), dtype=np.complex)
     clmout = np.zeros(shts.util.lmax2nlm(lmax_target), dtype=np.complex)
-    for ib,th1,th2 in zip(list(range(nband)),th1s,th2s):
+    for ib,th1,th2 in zip(range(nband),th1s,th2s):
 
         Nt_d,Np_d = shapes_d[ib]
         Nt,Np = shapes[ib]
@@ -664,9 +653,9 @@ def lens_glm_GLth_sym_timed(spin,dlm,glm,lmax_target,
         dphi_patch = (2. * np.pi) / Np * max(np.sin(_thup),np.sin(_thdown))
         dth_patch = (_thdown - _thup) / (Nt -1)
 
-        print('input t1,t2 %.3f %.3f in degrees'%(_thup /np.pi * 180,_thdown/np.pi * 180.))
-        print('North %.3f and South %.3f buffers in amin'%(buffN /np.pi * 180 * 60,buffS/np.pi * 180. * 60.))
-        print("cell (theta,phi) in amin (%.3f,%.3f)" % (dth_patch / np.pi * 60. * 180, dphi_patch / np.pi * 60. * 180))
+        print 'input t1,t2 %.3f %.3f in degrees'%(_thup /np.pi * 180,_thdown/np.pi * 180.)
+        print 'North %.3f and South %.3f buffers in amin'%(buffN /np.pi * 180 * 60,buffS/np.pi * 180. * 60.)
+        print "cell (theta,phi) in amin (%.3f,%.3f)" % (dth_patch / np.pi * 60. * 180, dphi_patch / np.pi * 60. * 180)
 
         if spin == 0:
             lenN,lenS,tim = lens_band_sym_timed(glm,_thup,_thdown,Nt,(tnewN,phinewN),(tnewS,phinewS),Nphi=Np)
@@ -690,12 +679,12 @@ def lens_glm_GLth_sym_timed(spin,dlm,glm,lmax_target,
         coadd_times(tim)
 
     t0 = time.time()
-    print("STATS for lmax tlm %s lmax dlm %s"%(hp.Alm.getlmax(glm.size),hp.Alm.getlmax(dlm.size)))
+    print "STATS for lmax tlm %s lmax dlm %s"%(hp.Alm.getlmax(glm.size),hp.Alm.getlmax(dlm.size))
     tot= 0.
-    for _k,_t in times.items() :
-        print('%20s: %.2f'%(_k,_t))
+    for _k,_t in times.iteritems() :
+        print '%20s: %.2f'%(_k,_t)
         tot += _t
-    print("%20s: %2.f sec."%('tot',tot))
+    print "%20s: %2.f sec."%('tot',tot)
     return glmout,clmout,ret
 
 
